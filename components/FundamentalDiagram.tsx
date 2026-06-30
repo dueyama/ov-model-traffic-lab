@@ -247,7 +247,10 @@ export function FundamentalDiagram() {
       <section className="hero-panel diagram-hero">
         <div className="hero-copy">
           <p className="eyebrow">{text.eyebrow}</p>
-          <h1>{text.title}</h1>
+          <h1 className="title-lockup">
+            <img className="title-icon" src="/ov-lab-icon.png" alt="" aria-hidden="true" />
+            <span>{text.title}</span>
+          </h1>
           <div className="formula-strip" aria-label={text.aria.formulas}>
             {DIAGRAM_FORMULAS.map((formula) => (
               <FormulaCard key={formula.labelKey} label={text.formulas[formula.labelKey]} tex={formula.tex} />

@@ -153,6 +153,29 @@ h1 {
   text-shadow: 0 0 34px rgba(47, 224, 152, 0.16);
 }
 
+.title-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+}
+
+.title-lockup span {
+  min-width: 0;
+}
+
+.title-icon {
+  flex: 0 0 auto;
+  width: clamp(34px, 3.8vw, 52px);
+  height: clamp(34px, 3.8vw, 52px);
+  border: 1px solid rgba(47, 224, 152, 0.24);
+  border-radius: 14px;
+  background: #050908;
+  box-shadow:
+    0 0 18px rgba(47, 224, 152, 0.16),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+}
+
 h2 {
   font-size: 24px;
 }

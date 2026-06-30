@@ -225,7 +225,10 @@ export function OvSimulatorCockpit() {
       <section className="hero-panel" aria-labelledby="app-title">
         <div className="hero-copy">
           <p className="eyebrow">{text.appEyebrow}</p>
-          <h1 id="app-title">{text.appTitle}</h1>
+          <h1 id="app-title" className="title-lockup">
+            <img className="title-icon" src="/ov-lab-icon.png" alt="" aria-hidden="true" />
+            <span>{text.appTitle}</span>
+          </h1>
           <div className="formula-strip" aria-label={text.aria.formulas}>
             {FORMULAS.map((formula) => (
               <FormulaCard key={formula.labelKey} label={text.formulas[formula.labelKey]} tex={formula.tex} />
