@@ -1,17 +1,24 @@
 "use client";
 
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import katex from "katex";
+import { LocaleSwitch } from "./LocaleSwitch";
+import { BANDO_PAPER_URL, GitHubLink } from "./ExternalLinks";
+import { COMMON_TEXT, LIVE_TEXT, presetText, useLocalePreference, type Locale } from "../lib/i18n";
 import {
   DEFAULT_OPTIONS,
   OVSimulator,
   PRESETS,
+  PRESET_ORDER,
   type PresetName,
   type SimulatorOptions,
   type SimulatorSnapshot,
   makeHistogram,
   optimalVelocity,
-  optimalVelocitySlope
+  optimalVelocitySlope,
+  presetMarkForName
 } from "../lib/ov-core";
 
 type ControlKey =
@@ -24,6 +31,8 @@ type ControlKey =
   | "noise"
   | "stepsPerFrame";
 
+type ActivePresetName = PresetName | "custom";
+
 type CanvasRefs = {
   ring: HTMLCanvasElement | null;
   xt: HTMLCanvasElement | null;
@@ -32,6 +41,19 @@ type CanvasRefs = {
   speed: HTMLCanvasElement | null;
   fourier: HTMLCanvasElement | null;
   stability: HTMLCanvasElement | null;
+  fundamental: HTMLCanvasElement | null;
+};
+
+type FundamentalPoint = {
+  density: number;
+  flow: number;
+  stable: boolean;
+};
+
+type FundamentalPresetMarker = FundamentalPoint & {
+  label: string;
+  mark: string;
+  source: string;
 };
 
 const COLORS = {
@@ -51,6 +73,25 @@ const COLORS = {
 
 const MODE_COLORS = ["#58a9ff", "#2fe098", "#ff6358", "#bb8cff", "#ffb454", "#9aa7ff"];
 
+const FORMULAS = [
+  {
+    labelKey: "motion",
+    tex: String.raw`\ddot{x}_n = a\left\{ V\!\left(\Delta x_n\right)-\dot{x}_n \right\}`
+  },
+  {
+    labelKey: "optimalVelocity",
+    tex: String.raw`V(h)=\tanh(h-2)+\tanh 2`
+  },
+  {
+    labelKey: "linearStability",
+    tex: String.raw`V'(b)\leq {a\over 2}`
+  },
+  {
+    labelKey: "headway",
+    tex: String.raw`\Delta x_n=x_{n+1}-x_n,\quad b={L\over N}`
+  }
+] as const;
+
 const BANDO_CITE = `@article{Bando1995OV,
   author = {Bando, M. and Hasebe, K. and Nakayama, A. and Shibata, A. and Sugiyama, Y.},
   title = {Dynamical model of traffic congestion and numerical simulation},
@@ -62,6 +103,9 @@ const BANDO_CITE = `@article{Bando1995OV,
 }`;
 
 export function OvSimulatorCockpit() {
+  const { mode: localeMode, locale, setMode: setLocaleMode } = useLocalePreference();
+  const text = LIVE_TEXT[locale];
+  const commonText = COMMON_TEXT[locale];
   const initialOptions = useMemo(
     () => ({ ...DEFAULT_OPTIONS, ...PRESETS.bandoFigure }),
     []
@@ -70,6 +114,7 @@ export function OvSimulatorCockpit() {
   const optionsRef = useRef<SimulatorOptions>(simulatorRef.current.options);
   const runningRef = useRef(true);
   const frameRef = useRef(0);
+  const localeRef = useRef<Locale>(locale);
   const canvasRefs = useRef<CanvasRefs>({
     ring: null,
     xt: null,
@@ -77,13 +122,14 @@ export function OvSimulatorCockpit() {
     headway: null,
     speed: null,
     fourier: null,
-    stability: null
+    stability: null,
+    fundamental: null
   });
 
   const [options, setOptions] = useState<SimulatorOptions>(simulatorRef.current.options);
   const [snapshot, setSnapshot] = useState<SimulatorSnapshot>(simulatorRef.current.snapshot());
   const [running, setRunning] = useState(true);
-  const [activePreset, setActivePreset] = useState<PresetName>("bandoFigure");
+  const [activePreset, setActivePreset] = useState<ActivePresetName>("bandoFigure");
 
   useEffect(() => {
     optionsRef.current = options;
@@ -92,6 +138,11 @@ export function OvSimulatorCockpit() {
   useEffect(() => {
     runningRef.current = running;
   }, [running]);
+
+  useEffect(() => {
+    localeRef.current = locale;
+    drawAll(canvasRefs.current, simulatorRef.current.snapshot(), simulatorRef.current.options, frameRef.current, locale);
+  }, [locale]);
 
   useEffect(() => {
     let animationId = 0;
@@ -106,7 +157,7 @@ export function OvSimulatorCockpit() {
       }
       frameRef.current += 1;
       const nextSnapshot = simulator.snapshot();
-      drawAll(canvasRefs.current, nextSnapshot, simulator.options, frameRef.current);
+      drawAll(canvasRefs.current, nextSnapshot, simulator.options, frameRef.current, localeRef.current);
       if (frameRef.current % 3 === 0) {
         setSnapshot(nextSnapshot);
       }
@@ -122,29 +173,30 @@ export function OvSimulatorCockpit() {
 
   useEffect(() => {
     const handleResize = () => {
-      drawAll(canvasRefs.current, simulatorRef.current.snapshot(), simulatorRef.current.options, frameRef.current);
+      drawAll(canvasRefs.current, simulatorRef.current.snapshot(), simulatorRef.current.options, frameRef.current, localeRef.current);
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  const resetWith = (nextOptions: Partial<SimulatorOptions>, preset?: PresetName) => {
+  const resetWith = (nextOptions: Partial<SimulatorOptions>, preset?: ActivePresetName) => {
     const merged = { ...simulatorRef.current.options, ...nextOptions };
     simulatorRef.current.reset(merged);
     optionsRef.current = simulatorRef.current.options;
     setOptions(simulatorRef.current.options);
     setSnapshot(simulatorRef.current.snapshot());
     if (preset) setActivePreset(preset);
-    drawAll(canvasRefs.current, simulatorRef.current.snapshot(), simulatorRef.current.options, frameRef.current);
+    drawAll(canvasRefs.current, simulatorRef.current.snapshot(), simulatorRef.current.options, frameRef.current, localeRef.current);
   };
 
   const setControl = (key: ControlKey, value: number) => {
     resetWith({ [key]: value } as Partial<SimulatorOptions>);
-    setActivePreset("bandoFigure");
+    setActivePreset("custom");
   };
 
   const applyPreset = (preset: PresetName) => {
-    resetWith({ ...PRESETS[preset], stepsPerFrame: options.stepsPerFrame }, preset);
+    const { label: _label, description: _description, source: _source, ...presetOptions } = PRESETS[preset];
+    resetWith({ ...presetOptions, stepsPerFrame: options.stepsPerFrame }, preset);
   };
 
   const stepBurst = () => {
@@ -153,26 +205,43 @@ export function OvSimulatorCockpit() {
     simulatorRef.current.step(100);
     const nextSnapshot = simulatorRef.current.snapshot();
     setSnapshot(nextSnapshot);
-    drawAll(canvasRefs.current, nextSnapshot, simulatorRef.current.options, frameRef.current);
+    drawAll(canvasRefs.current, nextSnapshot, simulatorRef.current.options, frameRef.current, localeRef.current);
   };
+
+  const presetInfo = activePreset === "custom"
+    ? {
+        label: text.customLabel,
+        description: text.customDescription,
+        source: "User-adjusted parameters; model equations and stability criterion from Bando et al. 1995."
+      }
+    : {
+        ...PRESETS[activePreset],
+        ...presetText(activePreset, locale)
+      };
+  const activePresetMark = activePreset === "custom" ? null : presetMarkForName(activePreset);
 
   return (
     <main className="shell">
       <section className="hero-panel" aria-labelledby="app-title">
         <div className="hero-copy">
-          <p className="eyebrow">Bando Optimal Velocity Model</p>
-          <h1 id="app-title">Traffic Jam Phase Lab</h1>
-          <div className="formula-strip" aria-label="model equations">
-            <span>x<sub>n</sub>'' = a {"{ V(dx_n) - x_n' }"}</span>
-            <span>V(h) = tanh(h - 2) + tanh 2</span>
-            <span>V'(h) {"<="} a / 2</span>
+          <p className="eyebrow">{text.appEyebrow}</p>
+          <h1 id="app-title">{text.appTitle}</h1>
+          <div className="formula-strip" aria-label={text.aria.formulas}>
+            {FORMULAS.map((formula) => (
+              <FormulaCard key={formula.labelKey} label={text.formulas[formula.labelKey]} tex={formula.tex} />
+            ))}
           </div>
         </div>
-        <div className="hero-stat-grid" aria-label="main readouts">
-          <Metric label="time" value={formatNumber(snapshot.t, 1)} />
-          <Metric label="density" value={formatNumber(snapshot.density, 3)} />
-          <Metric label="flow" value={formatNumber(snapshot.flow, 2)} />
-          <Metric label="state" value={snapshot.stable ? "stable" : "unstable"} tone={snapshot.stable ? "good" : "bad"} />
+        <div className="hero-stat-grid" aria-label={text.aria.readouts}>
+          <div className="external-link-row nav-pill-grid">
+            <GitHubLink label={commonText.githubRepo} />
+            <LocaleSwitch mode={localeMode} locale={locale} onChange={setLocaleMode} compact />
+          </div>
+          <Link className="nav-pill nav-pill-grid" href="/fundamental-diagram">{text.navFundamental}</Link>
+          <Metric label={text.metrics.time} value={formatNumber(snapshot.t, 1)} />
+          <Metric label={text.metrics.density} value={formatNumber(snapshot.density, 3)} />
+          <Metric label={text.metrics.flow} value={formatNumber(snapshot.flow, 2)} />
+          <Metric label={text.metrics.state} value={snapshot.stable ? commonText.stable : commonText.unstable} tone={snapshot.stable ? "good" : "bad"} />
         </div>
       </section>
 
@@ -180,78 +249,132 @@ export function OvSimulatorCockpit() {
         <div className="road-console">
           <div className="console-topline">
             <div>
-              <span className="section-kicker">circular road</span>
-              <h2>Live Ring</h2>
+              <span className="section-kicker">{text.circularRoad}</span>
+              <h2>{text.liveRing}</h2>
             </div>
             <div className={`phase-badge ${snapshot.stable ? "stable" : "unstable"}`}>
-              {snapshot.stable ? "linear stable" : "jam forming"}
+              {snapshot.stable ? text.linearStable : text.jamForming}
             </div>
           </div>
-          <canvas
-            ref={(node) => {
-              canvasRefs.current.ring = node;
-            }}
-            className="ring-canvas"
-            aria-label="Animated circular road simulation"
-          />
-          <div className="micro-metrics" aria-label="traffic metrics">
-            <Metric label="cars" value={String(options.carCount)} />
-            <Metric label="length" value={String(options.roadLength)} />
-            <Metric label="headway" value={formatNumber(snapshot.meanHeadway, 2)} />
-            <Metric label="avg speed" value={formatNumber(snapshot.avgSpeed, 2)} />
-            <Metric label="jam share" value={`${Math.round(snapshot.jamFraction * 100)}%`} tone={snapshot.jamFraction > 0.08 ? "bad" : "good"} />
+          <div className="ring-main-layout">
+            <div className="ring-stage">
+              <canvas
+                ref={(node) => {
+                  canvasRefs.current.ring = node;
+                }}
+                className="ring-canvas"
+                aria-label={text.aria.ring}
+              />
+            </div>
+            <section className="ring-fundamental-map" aria-label={text.aria.miniDiagram}>
+              <div className="mini-map-topline">
+                <span>{text.rhoQMap}</span>
+                <strong>{text.uniformFlowTheory}</strong>
+              </div>
+              <canvas
+                ref={(node) => {
+                  canvasRefs.current.fundamental = node;
+                }}
+                className="fundamental-mini-canvas"
+                aria-label={text.aria.miniDiagramCanvas}
+              />
+              <div className="mini-ring-stats fundamental-mini-stats">
+                <div>
+                  <span>{text.metrics.rho}</span>
+                  <strong>{formatNumber(snapshot.density, 3)}</strong>
+                </div>
+                <div>
+                  <span>{text.metrics.flow}</span>
+                  <strong>{formatNumber(snapshot.flow, 3)}</strong>
+                </div>
+                <div>
+                  <span>{text.metrics.state}</span>
+                  <strong>{snapshot.stable ? commonText.stable : commonText.wave}</strong>
+                </div>
+              </div>
+            </section>
+          </div>
+          <div className="micro-metrics" aria-label={text.aria.trafficMetrics}>
+            <Metric label={text.metrics.cars} value={String(options.carCount)} />
+            <Metric label={text.metrics.length} value={String(options.roadLength)} />
+            <Metric label={text.metrics.headway} value={formatNumber(snapshot.meanHeadway, 2)} />
+            <Metric label={text.metrics.avgSpeed} value={formatNumber(snapshot.avgSpeed, 2)} />
+            <Metric label={text.metrics.jamShare} value={`${Math.round(snapshot.jamFraction * 100)}%`} tone={snapshot.jamFraction > 0.08 ? "bad" : "good"} />
           </div>
         </div>
 
-        <aside className="control-console" aria-label="simulation controls">
+        <aside className="control-console" aria-label={text.controls}>
           <div className="transport-row">
             <IconButton
-              label={running ? "Pause" : "Run"}
-              title={running ? "Pause simulation" : "Run simulation"}
+              label={running ? text.pause : text.run}
+              title={running ? text.pauseTitle : text.runTitle}
               active={running}
               onClick={() => setRunning((value) => !value)}
             >
               {running ? <PauseIcon /> : <PlayIcon />}
             </IconButton>
-            <IconButton label="Reset" title="Reset simulation" onClick={() => resetWith({})}>
+            <IconButton label={text.reset} title={text.resetTitle} onClick={() => resetWith({})}>
               <ResetIcon />
             </IconButton>
-            <IconButton label="Step" title="Advance simulation" onClick={stepBurst}>
+            <IconButton label={text.step} title={text.stepTitle} onClick={stepBurst}>
               <StepIcon />
             </IconButton>
           </div>
 
-          <div className="preset-grid" aria-label="presets">
-            {(Object.keys(PRESETS) as PresetName[]).map((preset) => (
+          <div className="preset-grid" aria-label={text.aria.presets}>
+            {PRESET_ORDER.map((preset) => (
               <button
-                className={activePreset === preset ? "preset active" : "preset"}
+                className={activePreset === preset ? "preset preset-choice active" : "preset preset-choice"}
                 key={preset}
                 type="button"
                 onClick={() => applyPreset(preset)}
+                title={PRESETS[preset].source}
               >
-                {PRESETS[preset].label}
+                <span className="preset-mark preset-mark-compact">{presetMarkForName(preset)}</span>
+                <span>{presetText(preset, locale).label}</span>
               </button>
             ))}
           </div>
 
-          <ControlSlider label="Cars" value={options.carCount} min={20} max={150} step={1} onChange={(value) => setControl("carCount", value)} />
-          <ControlSlider label="Road length" value={options.roadLength} min={50} max={320} step={1} onChange={(value) => setControl("roadLength", value)} />
-          <ControlSlider label="Sensitivity a" value={options.sensitivity} min={0.2} max={2.4} step={0.01} onChange={(value) => setControl("sensitivity", value)} />
-          <ControlSlider label="Velocity scale" value={options.velocityScale} min={0.3} max={2.4} step={0.01} onChange={(value) => setControl("velocityScale", value)} />
-          <ControlSlider label="Headway offset" value={options.headwayOffset} min={0} max={5} step={0.01} onChange={(value) => setControl("headwayOffset", value)} />
-          <ControlSlider label="Perturbation" value={options.perturbation} min={0} max={1.5} step={0.01} onChange={(value) => setControl("perturbation", value)} />
-          <ControlSlider label="Noise" value={options.noise} min={0} max={0.04} step={0.001} onChange={(value) => setControl("noise", value)} />
-          <ControlSlider label="Speed" value={options.stepsPerFrame} min={1} max={40} step={1} onChange={(value) => {
+          <section className="preset-info" aria-label={text.aria.presetDescription}>
+            <div className="preset-info-heading">
+              <span>{text.selectedPreset}</span>
+              <strong className="preset-info-title">
+                {activePresetMark ? <span className="preset-mark">{activePresetMark}</span> : null}
+                <span>{presetInfo.label}</span>
+              </strong>
+            </div>
+            <p>{presetInfo.description}</p>
+            <dl>
+              <div>
+                <dt>{commonText.params}</dt>
+                <dd>N={options.carCount}, L={options.roadLength}, a={formatNumber(options.sensitivity, 2)}</dd>
+              </div>
+              <div>
+                <dt>{commonText.source}</dt>
+                <dd>{presetInfo.source}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <ControlSlider label={text.sliders.cars} value={options.carCount} min={20} max={150} step={1} onChange={(value) => setControl("carCount", value)} />
+          <ControlSlider label={text.sliders.roadLength} value={options.roadLength} min={50} max={320} step={1} onChange={(value) => setControl("roadLength", value)} />
+          <ControlSlider label={text.sliders.sensitivity} value={options.sensitivity} min={0.2} max={2.4} step={0.01} onChange={(value) => setControl("sensitivity", value)} />
+          <ControlSlider label={text.sliders.velocityScale} value={options.velocityScale} min={0.3} max={2.4} step={0.01} onChange={(value) => setControl("velocityScale", value)} />
+          <ControlSlider label={text.sliders.headwayOffset} value={options.headwayOffset} min={0} max={5} step={0.01} onChange={(value) => setControl("headwayOffset", value)} />
+          <ControlSlider label={text.sliders.perturbation} value={options.perturbation} min={0} max={1.5} step={0.01} onChange={(value) => setControl("perturbation", value)} />
+          <ControlSlider label={text.sliders.noise} value={options.noise} min={0} max={0.04} step={0.001} onChange={(value) => setControl("noise", value)} />
+          <ControlSlider label={text.sliders.speed} value={options.stepsPerFrame} min={1} max={40} step={1} onChange={(value) => {
             simulatorRef.current.setOptions({ stepsPerFrame: value });
             optionsRef.current = simulatorRef.current.options;
             setOptions(simulatorRef.current.options);
           }} />
 
           <label className="select-field">
-            <span>Optimal velocity</span>
+            <span>{text.optimalVelocity}</span>
             <select
               value={options.model}
-              onChange={(event) => resetWith({ model: event.target.value as SimulatorOptions["model"] })}
+              onChange={(event) => resetWith({ model: event.target.value as SimulatorOptions["model"] }, "custom")}
             >
               <option value="bando">tanh(h - 2) + tanh(2)</option>
               <option value="normalized">normalized Bando</option>
@@ -263,48 +386,73 @@ export function OvSimulatorCockpit() {
             <input
               type="checkbox"
               checked={options.clampVelocity}
-              onChange={(event) => resetWith({ clampVelocity: event.target.checked })}
+              onChange={(event) => resetWith({ clampVelocity: event.target.checked }, "custom")}
             />
-            <span>nonnegative velocity</span>
+            <span>{text.nonnegativeVelocity}</span>
           </label>
         </aside>
       </section>
 
-      <section className="chart-grid" aria-label="paper figure views">
-        <ChartShell title="Space-time trace" cite="Fig. 6">
+      <section className="chart-grid" aria-label={text.aria.paperFigures}>
+        <ChartShell title={text.charts.spaceTime} cite="Fig. 6">
           <canvas ref={(node) => { canvasRefs.current.xt = node; }} aria-label="x-t diagram" />
         </ChartShell>
-        <ChartShell title="Velocity snapshot" cite="Fig. 5">
+        <ChartShell title={text.charts.velocitySnapshot} cite="Fig. 5">
           <canvas ref={(node) => { canvasRefs.current.velocity = node; }} aria-label="velocity snapshot" />
         </ChartShell>
-        <ChartShell title="Headway distribution" cite="Fig. 7">
+        <ChartShell title={text.charts.headwayDistribution} cite="Fig. 7">
           <canvas ref={(node) => { canvasRefs.current.headway = node; }} aria-label="headway distribution" />
         </ChartShell>
-        <ChartShell title="Velocity distribution" cite="Fig. 8">
+        <ChartShell title={text.charts.velocityDistribution} cite="Fig. 8">
           <canvas ref={(node) => { canvasRefs.current.speed = node; }} aria-label="velocity distribution" />
         </ChartShell>
-        <ChartShell title="Fourier modes" cite="Fig. 9">
+        <ChartShell title={text.charts.fourierModes} cite="Fig. 9">
           <canvas ref={(node) => { canvasRefs.current.fourier = node; }} aria-label="Fourier mode chart" />
         </ChartShell>
-        <ChartShell title="Stability field" cite="Fig. 10">
+        <ChartShell title={text.charts.stabilityField} cite="Fig. 10">
           <canvas ref={(node) => { canvasRefs.current.stability = node; }} aria-label="stability map" />
         </ChartShell>
       </section>
 
       <section className="reference-panel" aria-labelledby="reference-title">
         <div>
-          <span className="section-kicker">reference / cite</span>
-          <h2 id="reference-title">Bando et al. 1995</h2>
+          <span className="section-kicker">{text.reference}</span>
+          <h2 id="reference-title">
+            <a href={BANDO_PAPER_URL} target="_blank" rel="noreferrer">Bando et al. 1995</a>
+          </h2>
         </div>
         <p>
           M. Bando, K. Hasebe, A. Nakayama, A. Shibata, and Y. Sugiyama,
-          "Dynamical model of traffic congestion and numerical simulation,"
+          <a href={BANDO_PAPER_URL} target="_blank" rel="noreferrer"> "Dynamical model of traffic congestion and numerical simulation,"</a>
           <cite> Physical Review E</cite> 51, 1035-1042 (1995).
-          DOI: <a href="https://doi.org/10.1103/PhysRevE.51.1035">10.1103/PhysRevE.51.1035</a>.
+          DOI: <a href={BANDO_PAPER_URL} target="_blank" rel="noreferrer">10.1103/PhysRevE.51.1035</a>.
         </p>
         <pre><code>{BANDO_CITE}</code></pre>
       </section>
     </main>
+  );
+}
+
+function FormulaCard({ label, tex }: { label: string; tex: string }) {
+  const html = useMemo(
+    () => katex.renderToString(tex, {
+      displayMode: true,
+      output: "html",
+      strict: false,
+      throwOnError: false
+    }),
+    [tex]
+  );
+
+  return (
+    <div className="formula-card">
+      <span className="formula-label">{label}</span>
+      <div
+        className="formula-tex"
+        aria-label={tex}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
   );
 }
 
@@ -422,14 +570,25 @@ function canvasContext(canvas: HTMLCanvasElement | null) {
   return { ctx, width, height };
 }
 
-function drawAll(refs: CanvasRefs, snapshot: SimulatorSnapshot, options: SimulatorOptions, frame: number) {
-  drawRing(refs.ring, snapshot, options, frame);
-  drawXT(refs.xt, snapshot, options);
-  drawVelocity(refs.velocity, snapshot);
-  drawHeadway(refs.headway, snapshot);
-  drawSpeed(refs.speed, snapshot);
-  drawFourier(refs.fourier, snapshot);
-  drawStability(refs.stability, snapshot, options);
+function drawAll(refs: CanvasRefs, snapshot: SimulatorSnapshot, options: SimulatorOptions, frame: number, locale: Locale) {
+  safeCanvasDraw(() => drawRing(refs.ring, snapshot, options, frame, locale));
+  if (frame <= 1 || frame % 3 === 0) {
+    safeCanvasDraw(() => drawFundamentalMini(refs.fundamental, snapshot, options, locale));
+  }
+  safeCanvasDraw(() => drawXT(refs.xt, snapshot, options, locale));
+  safeCanvasDraw(() => drawVelocity(refs.velocity, snapshot, locale));
+  safeCanvasDraw(() => drawHeadway(refs.headway, snapshot, locale));
+  safeCanvasDraw(() => drawSpeed(refs.speed, snapshot, locale));
+  safeCanvasDraw(() => drawFourier(refs.fourier, snapshot, locale));
+  safeCanvasDraw(() => drawStability(refs.stability, snapshot, options, locale));
+}
+
+function safeCanvasDraw(draw: () => void) {
+  try {
+    draw();
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function drawPanelFrame(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -513,9 +672,10 @@ function speedColor(speed: number, maxSpeed: number) {
   return COLORS.green;
 }
 
-function drawRing(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions, frame: number) {
+function drawRing(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions, frame: number, locale: Locale) {
   const canvasData = canvasContext(canvas);
   if (!canvasData) return;
+  const text = LIVE_TEXT[locale].canvas;
   const { ctx, width, height } = canvasData;
   const centerX = width / 2;
   const centerY = height / 2;
@@ -583,7 +743,7 @@ function drawRing(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot,
   ctx.lineTo(centerX + outer + 18, centerY);
   ctx.stroke();
   ctx.shadowBlur = 0;
-  drawLabel(ctx, "detector", centerX + outer + 22, centerY, COLORS.blue);
+  drawLabel(ctx, text.detector, centerX + outer + 22, centerY, COLORS.blue);
 
   const maxSpeed = Math.max(1, snapshot.maxSpeed);
   const carLength = Math.max(11, Math.min(20, roadWidth * 0.45));
@@ -615,16 +775,206 @@ function drawRing(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot,
   ctx.font = "800 22px ui-sans-serif, system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(snapshot.stable ? "FREE FLOW" : "DENSITY WAVE", centerX, centerY - 16);
+  ctx.fillText(snapshot.stable ? text.freeFlow : text.densityWave, centerX, centerY - 16);
   ctx.fillStyle = snapshot.jamFraction > 0.08 ? COLORS.red : COLORS.green;
   ctx.font = "700 13px ui-sans-serif, system-ui, sans-serif";
-  ctx.fillText(`jam share ${Math.round(snapshot.jamFraction * 100)}%`, centerX, centerY + 14);
+  ctx.fillText(`${text.jamShare} ${Math.round(snapshot.jamFraction * 100)}%`, centerX, centerY + 14);
   ctx.restore();
 }
 
-function drawXT(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions) {
+function drawFundamentalMini(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions, locale: Locale) {
   const canvasData = canvasContext(canvas);
   if (!canvasData) return;
+  const text = LIVE_TEXT[locale].canvas;
+  const { ctx, width, height } = canvasData;
+  const presetMarkers = buildFundamentalPresetMarkers(options);
+  const xMax = 0.92;
+  const curve = buildFundamentalMiniCurve(options, xMax);
+  const visiblePresetMarkers = presetMarkers.filter((marker) => marker.density <= xMax);
+  const yMax = Math.max(
+    0.1,
+    snapshot.flow,
+    ...curve.map((point) => point.flow),
+    ...visiblePresetMarkers.map((marker) => marker.flow)
+  ) * 1.18;
+  const plot = { left: 42, top: 24, width: width - 62, height: height - 64 };
+  const xScale = (density: number) => plot.left + density / xMax * plot.width;
+  const yScale = (flow: number) => plot.top + plot.height - flow / yMax * plot.height;
+
+  drawPanelFrame(ctx, width, height);
+  curve.forEach((point, index) => {
+    const next = curve[index + 1];
+    if (!next) return;
+    ctx.fillStyle = point.stable ? "rgba(47,224,152,0.07)" : "rgba(255,99,88,0.10)";
+    ctx.fillRect(xScale(point.density), plot.top, Math.max(1, xScale(next.density) - xScale(point.density)), plot.height);
+  });
+  drawAxes(ctx, plot, 4, 3);
+
+  ctx.save();
+  ctx.strokeStyle = COLORS.blue;
+  ctx.shadowColor = "rgba(88,169,255,0.42)";
+  ctx.shadowBlur = 10;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  curve.forEach((point, index) => {
+    const x = xScale(point.density);
+    const y = yScale(point.flow);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+  drawMiniChartLabel(ctx, text.uniformFlowCurve, plot.left + 10, plot.top + 12, COLORS.blue);
+
+  visiblePresetMarkers.forEach((marker) => {
+    drawMiniPresetMarker(ctx, xScale(marker.density), yScale(marker.flow), marker.stable ? COLORS.green : COLORS.red, marker.mark, plot);
+  });
+
+  const currentX = xScale(Math.min(snapshot.density, xMax));
+  const currentY = yScale(Math.min(snapshot.flow, yMax));
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,99,88,0.34)";
+  ctx.setLineDash([4, 5]);
+  ctx.beginPath();
+  ctx.moveTo(currentX, plot.top);
+  ctx.lineTo(currentX, plot.top + plot.height);
+  ctx.moveTo(plot.left, currentY);
+  ctx.lineTo(plot.left + plot.width, currentY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawMiniCurrentPoint(ctx, currentX, currentY);
+  ctx.restore();
+
+  drawMiniAxisLabels(ctx, plot, xMax, yMax, locale);
+  drawMiniChartLabel(ctx, text.nowQ, Math.min(width - 38, currentX + 10), Math.max(16, currentY - 13), COLORS.red);
+}
+
+function drawMiniCurrentPoint(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save();
+  ctx.fillStyle = COLORS.red;
+  ctx.shadowColor = "rgba(255,99,88,0.76)";
+  ctx.shadowBlur = 16;
+  ctx.beginPath();
+  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = COLORS.ink;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function buildFundamentalMiniCurve(options: SimulatorOptions, xMax: number) {
+  const points: FundamentalPoint[] = [];
+  const minDensity = 0.08;
+  for (let i = 0; i <= 160; i += 1) {
+    const density = minDensity + (xMax - minDensity) * i / 160;
+    const headway = 1 / density;
+    const speed = Math.max(0, optimalVelocity(headway, options));
+    points.push({
+      density,
+      flow: density * speed,
+      stable: optimalVelocitySlope(headway, options) <= options.sensitivity / 2
+    });
+  }
+  return points;
+}
+
+function buildFundamentalPresetMarkers(options: SimulatorOptions): FundamentalPresetMarker[] {
+  return PRESET_ORDER.map((presetName) => {
+    const preset = PRESETS[presetName];
+    const { label: _label, description: _description, source: _source, ...presetOptions } = preset;
+    const merged = { ...options, ...presetOptions };
+    const density = merged.carCount / merged.roadLength;
+    const headway = 1 / density;
+    const speed = Math.max(0, optimalVelocity(headway, merged));
+    return {
+      label: preset.label,
+      mark: presetMarkForName(presetName),
+      source: preset.source,
+      density,
+      flow: density * speed,
+      stable: optimalVelocitySlope(headway, merged) <= merged.sensitivity / 2
+    };
+  });
+}
+
+function drawMiniPresetMarker(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  color: string,
+  mark: string,
+  plot: PlotRect
+) {
+  const nearRightEdge = x > plot.left + plot.width - 25;
+  const labelX = x + (nearRightEdge ? -9 : 9);
+  const labelY = y - 9;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 9;
+  ctx.fillRect(-4.8, -4.8, 9.6, 9.6);
+  ctx.restore();
+
+  ctx.save();
+  ctx.font = "800 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = nearRightEdge ? "right" : "left";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(5,9,8,0.9)";
+  ctx.strokeText(mark, labelX, labelY);
+  ctx.fillStyle = COLORS.ink;
+  ctx.fillText(mark, labelX, labelY);
+  ctx.restore();
+}
+
+function drawMiniAxisLabels(ctx: CanvasRenderingContext2D, plot: PlotRect, xMax: number, yMax: number, locale: Locale) {
+  const text = LIVE_TEXT[locale].canvas;
+  ctx.save();
+  ctx.fillStyle = COLORS.muted;
+  ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "right";
+  for (let i = 0; i <= 3; i += 1) {
+    const flow = yMax * i / 3;
+    const y = plot.top + plot.height - flow / yMax * plot.height;
+    ctx.fillText(formatNumber(flow, 2), plot.left - 6, y);
+  }
+  ctx.textAlign = "center";
+  for (let i = 0; i <= 4; i += 1) {
+    const density = xMax * i / 4;
+    const x = plot.left + density / xMax * plot.width;
+    ctx.fillText(formatNumber(density, 2), x, plot.top + plot.height + 16);
+  }
+  ctx.fillText(text.densityRho, plot.left + plot.width / 2, plot.top + plot.height + 30);
+  ctx.save();
+  ctx.translate(13, plot.top + plot.height / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(text.flowQ, 0, 0);
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawMiniChartLabel(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
+  ctx.save();
+  ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(5,9,8,0.88)";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function drawXT(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions, locale: Locale) {
+  const canvasData = canvasContext(canvas);
+  if (!canvasData) return;
+  const text = LIVE_TEXT[locale].canvas;
   const { ctx, width, height } = canvasData;
   const history = snapshot.history;
   const plot = { left: 42, top: 18, width: width - 56, height: height - 52 };
@@ -646,13 +996,14 @@ function drawXT(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, o
     }
     ctx.globalAlpha = 1;
   }
-  drawLabel(ctx, "traffic position", plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
-  drawLabel(ctx, "time", 14, plot.top + plot.height / 2, COLORS.muted, "center");
+  drawLabel(ctx, text.trafficPosition, plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
+  drawLabel(ctx, text.time, 14, plot.top + plot.height / 2, COLORS.muted, "center");
 }
 
-function drawVelocity(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot) {
+function drawVelocity(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, locale: Locale) {
   const canvasData = canvasContext(canvas);
   if (!canvasData) return;
+  const text = LIVE_TEXT[locale].canvas;
   const { ctx, width, height } = canvasData;
   const values = snapshot.v;
   const yMax = Math.max(2.05, snapshot.maxSpeed * 1.15, 0.4);
@@ -692,17 +1043,17 @@ function drawVelocity(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnaps
   ctx.lineTo(plot.left + plot.width, jamY);
   ctx.stroke();
   ctx.restore();
-  drawLabel(ctx, "car number", plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
+  drawLabel(ctx, text.carNumber, plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
 }
 
-function drawHeadway(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot) {
+function drawHeadway(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, locale: Locale) {
   const max = Math.max(5, snapshot.headwayP90 * 1.7, snapshot.meanHeadway * 3);
-  drawHistogram(canvas, snapshot.headways, 24, 0, max, COLORS.green, "headway");
+  drawHistogram(canvas, snapshot.headways, 24, 0, max, COLORS.green, LIVE_TEXT[locale].canvas.headway);
 }
 
-function drawSpeed(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot) {
+function drawSpeed(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, locale: Locale) {
   const max = Math.max(2.05, snapshot.maxSpeed * 1.2);
-  drawHistogram(canvas, snapshot.v, 24, 0, max, COLORS.amber, "velocity");
+  drawHistogram(canvas, snapshot.v, 24, 0, max, COLORS.amber, LIVE_TEXT[locale].canvas.velocity);
 }
 
 function drawHistogram(canvas: HTMLCanvasElement | null, values: number[], binCount: number, minValue: number, maxValue: number, color: string, label: string) {
@@ -729,9 +1080,10 @@ function drawHistogram(canvas: HTMLCanvasElement | null, values: number[], binCo
   drawLabel(ctx, label, plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
 }
 
-function drawFourier(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot) {
+function drawFourier(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, locale: Locale) {
   const canvasData = canvasContext(canvas);
   if (!canvasData) return;
+  const text = LIVE_TEXT[locale].canvas;
   const { ctx, width, height } = canvasData;
   const history = snapshot.history;
   const plot = { left: 42, top: 18, width: width - 56, height: height - 52 };
@@ -763,12 +1115,13 @@ function drawFourier(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapsh
     ctx.restore();
     drawLabel(ctx, `k=${mode}`, plot.left + 10 + modeIndex * 46, plot.top + 12, color);
   });
-  drawLabel(ctx, "time", plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
+  drawLabel(ctx, text.time, plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
 }
 
-function drawStability(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions) {
+function drawStability(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnapshot, options: SimulatorOptions, locale: Locale) {
   const canvasData = canvasContext(canvas);
   if (!canvasData) return;
+  const text = LIVE_TEXT[locale].canvas;
   const { ctx, width, height } = canvasData;
   const plot = { left: 42, top: 18, width: width - 56, height: height - 52 };
   const xMax = Math.max(6, snapshot.headwayP90 * 1.35, snapshot.meanHeadway * 2.2);
@@ -801,7 +1154,7 @@ function drawStability(canvas: HTMLCanvasElement | null, snapshot: SimulatorSnap
   drawVerticalMarker(ctx, plot, snapshot.meanHeadway, xMax, COLORS.blue, "mean");
   drawVerticalMarker(ctx, plot, snapshot.headwayP10, xMax, COLORS.red, "p10");
   drawVerticalMarker(ctx, plot, snapshot.headwayP90, xMax, COLORS.green, "p90");
-  drawLabel(ctx, "headway", plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
+  drawLabel(ctx, text.headway, plot.left + plot.width / 2, height - 14, COLORS.muted, "center");
 }
 
 function drawVerticalMarker(

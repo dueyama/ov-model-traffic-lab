@@ -58,6 +58,8 @@ export type PresetName = "bandoFigure" | "freeFlow" | "denseJam" | "slowReaction
 
 export type Preset = Partial<SimulatorOptions> & {
   label: string;
+  description: string;
+  source: string;
 };
 
 const TWO_PI = Math.PI * 2;
@@ -83,6 +85,8 @@ export const DEFAULT_OPTIONS: SimulatorOptions = {
 export const PRESETS: Record<PresetName, Preset> = {
   bandoFigure: {
     label: "Bando 1995",
+    description: "論文の realistic model と同じ N=100, L=200, a=1 を基準に、小さな摂動から渋滞クラスターが発達する様子を見るための再現プリセット。",
+    source: "Bando et al. 1995, Sec. III B, Eq. (24), Figs. 5-10.",
     carCount: 100,
     roadLength: 200,
     sensitivity: 1,
@@ -96,6 +100,8 @@ export const PRESETS: Record<PresetName, Preset> = {
   },
   freeFlow: {
     label: "Free flow",
+    description: "車両数を少なくして平均車間距離を大きくした比較用ケース。密度波が減衰し、ほぼ一様流に戻る挙動を確認する。",
+    source: "App-derived preset using the OV model and stability criterion in Bando et al. 1995, Sec. II B.",
     carCount: 40,
     roadLength: 200,
     sensitivity: 1,
@@ -109,6 +115,8 @@ export const PRESETS: Record<PresetName, Preset> = {
   },
   denseJam: {
     label: "Dense jam",
+    description: "車両数を増やして高密度にした比較用ケース。停止に近い車群と速い車群に分かれ、渋滞波が見えやすい。",
+    source: "App-derived density variant of the Bando realistic model, based on Bando et al. 1995, Sec. III B.",
     carCount: 125,
     roadLength: 200,
     sensitivity: 1,
@@ -122,6 +130,8 @@ export const PRESETS: Record<PresetName, Preset> = {
   },
   slowReaction: {
     label: "Slow reaction",
+    description: "感度 a を下げたケース。反応が鈍いほど安定条件 V'(b) <= a/2 を満たしにくくなり、密度ゆらぎが成長しやすい。",
+    source: "App-derived sensitivity variant using the linear stability criterion in Bando et al. 1995, Sec. II B.",
     carCount: 86,
     roadLength: 200,
     sensitivity: 0.52,
@@ -135,6 +145,8 @@ export const PRESETS: Record<PresetName, Preset> = {
   },
   simpleModel: {
     label: "Simple model",
+    description: "V(h)=tanh(h) の単純モデル。論文では不安定条件で自然な渋滞ではなく負速度を伴う破綻が起こる例として扱われる。",
+    source: "Bando et al. 1995, Sec. III A, Eq. (16), Eqs. (22)-(23), Fig. 4.",
     carCount: 100,
     roadLength: 50,
     sensitivity: 1,
@@ -147,6 +159,15 @@ export const PRESETS: Record<PresetName, Preset> = {
     model: "simple"
   }
 };
+
+export const PRESET_ORDER = Object.keys(PRESETS) as PresetName[];
+export const PRESET_MARKS = ["A", "B", "C", "D", "E"] as const;
+
+export function presetMarkForName(presetName: PresetName) {
+  const index = PRESET_ORDER.indexOf(presetName);
+  if (index < 0) return "?";
+  return PRESET_MARKS[index] ?? String(index + 1);
+}
 
 export type HistogramBin = {
   x0: number;
