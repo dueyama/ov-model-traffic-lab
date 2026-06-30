@@ -2,6 +2,8 @@
 
 An interactive Next.js simulator for the Optimal Velocity traffic-flow model on a circular road. It lets you change density, sensitivity, perturbation, and the optimal-velocity curve, then watch spontaneous congestion emerge.
 
+Production: [https://ov-model-traffic-lab.vercel.app/](https://ov-model-traffic-lab.vercel.app/)
+
 The app includes live views corresponding to the analysis in Bando et al. 1995:
 
 - circular-road car animation
@@ -71,3 +73,5 @@ This project is intended to deploy through Vercel's GitHub integration:
 4. Set production deployment to the default branch.
 
 No environment variables are required. The local `private/` folder is ignored and must remain unpublished.
+
+Vercel Web Analytics is installed through `@vercel/analytics` and mounted in `app/layout.tsx`.
